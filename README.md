@@ -356,6 +356,38 @@ boltzgen run example/binding_disordered_peptides/tpp4.yaml \
   --alpha 0.2
 ```
 
+# Complex RMSD Filtering
+
+BoltzGen supports advanced filtering based on complex RMSD calculated across multiple diffusion samples. This feature verifies that the binding conformation is recapitulated consistently across samples, providing more robust validation.
+
+**Key features:**
+- Aligns non-designed chains (target/receptor) first
+- Computes RMSD only on designed protein chains after alignment
+- Filters based on number of diffusion samples passing threshold
+
+**Quick start:**
+
+Enable during initial run:
+```bash
+boltzgen run example/vanilla_protein/1g13prot.yaml \
+  --output workbench/test \
+  --protocol protein-anything \
+  --num_designs 1000 \
+  --config analysis complex_rmsd_metrics=true complex_rmsd_threshold=2.5 \
+  --config filtering filter_complex_rmsd=true min_complex_rmsd_samples=3
+```
+
+Or rerun filtering after analysis:
+```bash
+boltzgen run example/vanilla_protein/1g13prot.yaml \
+  --output workbench/test \
+  --protocol protein-anything \
+  --steps filtering \
+  --config filtering filter_complex_rmsd=true min_complex_rmsd_samples=5
+```
+
+**For detailed documentation, see [COMPLEX_RMSD_FILTERING.md](COMPLEX_RMSD_FILTERING.md)**
+
 # All command line arguments
 
 ## `boltzgen run`

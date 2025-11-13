@@ -104,6 +104,8 @@ class Analyze(Task):
         foldseek_binary: str = "/data/rbg/users/hstark/foldseek/bin/foldseek",
         skip_specific_ids: List[str] = None,
         designfolding_metrics: bool = False,
+        complex_rmsd_metrics: bool = False,
+        complex_rmsd_threshold: float = 2.5,
     ) -> None:
         """Initialize the task.
 
@@ -152,6 +154,8 @@ class Analyze(Task):
         self.wandb = wandb
         self.slurm = slurm
         self.diversity_subset = diversity_subset
+        self.complex_rmsd_metrics = complex_rmsd_metrics
+        self.complex_rmsd_threshold = complex_rmsd_threshold
 
         if design_dir is not None:
             self.init_datasets(design_dir, load_dataset=False)
@@ -953,6 +957,16 @@ class Analyze(Task):
                 )
                 fold_metrics_bb = {f"{k}": v for k, v in fold_metrics_bb.items()}
                 metrics.update(fold_metrics_bb)
+
+            # Compute complex RMSD metrics across all diffusion samples
+            if self.complex_rmsd_metrics:
+                from boltzgen.task.analyze.analyze_utils import get_complex_rmsd_metrics
+                complex_metrics = get_complex_rmsd_metrics(
+                    feat=feat,
+                    folded=folded,
+                    complex_rmsd_threshold=self.complex_rmsd_threshold,
+                )
+                metrics.update(complex_metrics)
 
             # Construct features for refolded complex
             feat_out = {}

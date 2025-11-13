@@ -16,6 +16,10 @@ largest_hydrophobic: false
 largest_hydrophobic_refolded: true
 run_clustering: false
 
+# Complex RMSD metrics (for filtering based on diffusion samples)
+complex_rmsd_metrics: false  # Enable to compute complex RMSD across all diffusion samples
+complex_rmsd_threshold: 2.5  # Threshold for counting passing diffusion samples
+
 # Liability analysis
 liability_analysis: true
 liability_modality: peptide

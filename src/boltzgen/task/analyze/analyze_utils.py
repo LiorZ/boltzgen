@@ -71,6 +71,86 @@ def compute_rmsd(atom_coords: torch.Tensor, pred_atom_coords: torch.Tensor):
     return rmsd
 
 
+def compute_complex_rmsd_all_samples(
+    feat,
+    folded,
+    design_mask,
+    target_mask,
+    atom_mask,
+):
+    """
+    Compute RMSD for all diffusion samples with target alignment.
+    
+    This function:
+    1. Aligns the target (non-designed chains) between ground truth and predicted structures
+    2. Computes RMSD only on the designed protein chains after alignment
+    
+    Parameters
+    ----------
+    feat : dict
+        Feature dictionary containing ground truth coordinates and masks
+    folded : dict
+        Dictionary containing predicted coordinates for all diffusion samples
+    design_mask : torch.Tensor
+        Mask indicating designed atoms
+    target_mask : torch.Tensor
+        Mask indicating target (non-designed) atoms
+    atom_mask : torch.Tensor
+        Mask indicating resolved atoms
+    
+    Returns
+    -------
+    torch.Tensor
+        RMSD values for all diffusion samples (shape: [num_samples])
+    """
+    # Get ground truth coordinates
+    true_coords = feat["coords"].squeeze(0)  # Shape: [K, L, 3] where K is num conformers
+    
+    # Get predicted coordinates for all samples
+    pred_coords = torch.from_numpy(folded["coords"])  # Shape: [num_samples, L, 3]
+    num_samples = pred_coords.shape[0]
+    K = true_coords.shape[0]
+    
+    # Repeat true coords for each sample
+    true_coords_expanded = true_coords.repeat((num_samples, 1, 1))  # [num_samples * K, L, 3]
+    
+    # Repeat masks for all samples
+    design_mask_expanded = design_mask.repeat(num_samples * K)
+    target_mask_expanded = target_mask.repeat(num_samples * K)
+    atom_mask_expanded = atom_mask.repeat(num_samples * K)
+    
+    # Expand pred_coords to match conformers
+    pred_coords_expanded = pred_coords.repeat_interleave(K, 0)  # [num_samples * K, L, 3]
+    
+    # Compute alignment weights (equal for all atoms)
+    align_weights = torch.ones_like(true_coords_expanded[..., 0])
+    
+    # Use target mask for alignment (align non-designed chains)
+    used_mask = atom_mask_expanded * target_mask_expanded
+    used_weights = align_weights * target_mask_expanded
+    
+    # Align structures based on target
+    with torch.no_grad():
+        aligned_coords = weighted_rigid_align(
+            true_coords_expanded, pred_coords_expanded, used_weights, mask=used_mask
+        )
+    
+    # Compute RMSD only on designed atoms after alignment
+    mse = ((pred_coords_expanded - aligned_coords) ** 2).sum(dim=-1)
+    rmsd_mask = design_mask_expanded * atom_mask_expanded
+    
+    rmsd = torch.sqrt(
+        torch.sum(mse * rmsd_mask, dim=-1)
+        / torch.sum(rmsd_mask, dim=-1).clamp_min(1e-7)
+    )
+    
+    # Reshape to [num_samples, K] and take best across conformers for each sample
+    rmsd = rmsd.reshape(num_samples, K)
+    best_rmsd_per_sample = torch.min(rmsd, dim=1).values
+    
+    return best_rmsd_per_sample
+
+
 def make_histogram(
     df,
     column_name: str,
@@ -178,6 +258,82 @@ def get_fold_metrics(
     prefixed_metrics = {f"{prefix}{k}": v for k, v in metrics.items()}
     prefixed_metrics.update(confs)
     return prefixed_metrics
+
+
+def get_complex_rmsd_metrics(
+    feat,
+    folded,
+    complex_rmsd_threshold=2.5,
+):
+    """
+    Compute complex RMSD metrics across all diffusion samples.
+    
+    This computes RMSD where:
+    1. Non-designed chains (target/receptor) are aligned
+    2. RMSD is calculated only on designed protein chains
+    
+    Parameters
+    ----------
+    feat : dict
+        Feature dictionary with ground truth structure
+    folded : dict
+        Dictionary with predicted coordinates for all diffusion samples
+    complex_rmsd_threshold : float
+        Threshold for counting passing samples (default: 2.5)
+    
+    Returns
+    -------
+    dict
+        Dictionary with:
+        - complex_rmsd_best: best (minimum) RMSD across all samples
+        - complex_rmsd_samples_passing: number of samples below threshold
+        - complex_rmsd_samples_total: total number of samples
+        - complex_rmsd_pass_fraction: fraction of samples passing threshold
+    """
+    # Get masks for design and target atoms
+    design_mask = feat["design_mask"].bool()
+    design_resolved_mask = design_mask & feat["token_resolved_mask"].bool()
+    target_resolved_mask = ~design_mask & feat["token_resolved_mask"].bool()
+    
+    atom_design_resolved_mask = (
+        (feat["atom_to_token"].float() @ design_resolved_mask.unsqueeze(-1).float())
+        .bool()
+        .squeeze()
+    )
+    atom_target_resolved_mask = (
+        (feat["atom_to_token"].float() @ target_resolved_mask.unsqueeze(-1).float())
+        .bool()
+        .squeeze()
+    )
+    atom_mask = feat["atom_resolved_mask"]
+    
+    # Get design and target masks for resolved atoms only
+    design_atom_mask = atom_design_resolved_mask[atom_mask]
+    target_atom_mask = atom_target_resolved_mask[atom_mask]
+    
+    # Compute RMSD for all samples
+    rmsd_all_samples = compute_complex_rmsd_all_samples(
+        feat=feat,
+        folded=folded,
+        design_mask=design_atom_mask,
+        target_mask=target_atom_mask,
+        atom_mask=torch.ones_like(design_atom_mask),
+    )
+    
+    # Compute metrics
+    best_rmsd = float(torch.min(rmsd_all_samples).item())
+    num_passing = int((rmsd_all_samples <= complex_rmsd_threshold).sum().item())
+    total_samples = len(rmsd_all_samples)
+    pass_fraction = num_passing / total_samples if total_samples > 0 else 0.0
+    
+    metrics = {
+        "complex_rmsd_best": best_rmsd,
+        "complex_rmsd_samples_passing": num_passing,
+        "complex_rmsd_samples_total": total_samples,
+        "complex_rmsd_pass_fraction": pass_fraction,
+    }
+    
+    return metrics
 
 
 def count_noncovalents(feat):

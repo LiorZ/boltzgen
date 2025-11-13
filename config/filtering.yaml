@@ -14,3 +14,7 @@ metrics_override:  null  # overrides metrics None values delete keys
 num_liability_plots:  0
 plot_seq_logos:  false  # make sequence logo diagrams of designed sequence
 
+# Complex RMSD filtering (based on diffusion samples)
+filter_complex_rmsd:  false  # Filter based on number of diffusion samples passing complex RMSD threshold
+min_complex_rmsd_samples:  1  # Minimum number of diffusion samples that must pass the complex RMSD threshold
+

@@ -170,6 +170,8 @@ class Filter(Task):
             Dict
         ] = [],  # For example: [{"feature": "design_ALA", "lower_is_better": True, "threshold": 0.3}],
         size_buckets: list[Dict] = [],
+        filter_complex_rmsd: bool = False,  # Filter based on number of diffusion samples passing complex RMSD threshold
+        min_complex_rmsd_samples: int = 1,  # Minimum number of diffusion samples that must pass the complex RMSD threshold
     ):
         super().__init__()
         assert modality in ["peptide", "antibody"]
@@ -178,6 +180,8 @@ class Filter(Task):
         self.top_budget = top_budget
         self.use_affinity = use_affinity
         self.filter_cysteine = filter_cysteine
+        self.filter_complex_rmsd = filter_complex_rmsd
+        self.min_complex_rmsd_samples = min_complex_rmsd_samples
         self.from_inverse_folded = from_inverse_folded
         self.filter_bindingsite = filter_bindingsite
         self.budget = budget
@@ -302,6 +306,14 @@ class Filter(Task):
                         "threshold": 0.2,
                     },
                 ]
+            )
+        if filter_complex_rmsd:
+            self.filters.append(
+                {
+                    "feature": "complex_rmsd_samples_passing",
+                    "lower_is_better": False,
+                    "threshold": min_complex_rmsd_samples,
+                }
             )
         self.filters.extend(additional_filters)
 

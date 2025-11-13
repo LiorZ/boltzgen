@@ -103,8 +103,12 @@ def compute_complex_rmsd_all_samples(
     torch.Tensor
         RMSD values for all diffusion samples (shape: [num_samples])
     """
-    # Get ground truth coordinates
-    true_coords = feat["coords"].squeeze(0)  # Shape: [K, L, 3] where K is num conformers
+    # Get ground truth coordinates (ensure conformer dimension present)
+    true_coords = feat["coords"]
+    if true_coords.dim() == 4:
+        true_coords = true_coords.squeeze(0)
+    if true_coords.dim() == 2:
+        true_coords = true_coords.unsqueeze(0)
     
     # Get predicted coordinates for all samples
     pred_coords = torch.from_numpy(folded["coords"])  # Shape: [num_samples, L, 3]
@@ -115,9 +119,9 @@ def compute_complex_rmsd_all_samples(
     true_coords_expanded = true_coords.repeat((num_samples, 1, 1))  # [num_samples * K, L, 3]
     
     # Repeat masks for all samples
-    design_mask_expanded = design_mask.repeat(num_samples * K)
-    target_mask_expanded = target_mask.repeat(num_samples * K)
-    atom_mask_expanded = atom_mask.repeat(num_samples * K)
+    design_mask_expanded = design_mask.unsqueeze(0).repeat(num_samples * K, 1)
+    target_mask_expanded = target_mask.unsqueeze(0).repeat(num_samples * K, 1)
+    atom_mask_expanded = atom_mask.unsqueeze(0).repeat(num_samples * K, 1)
     
     # Expand pred_coords to match conformers
     pred_coords_expanded = pred_coords.repeat_interleave(K, 0)  # [num_samples * K, L, 3]
@@ -305,11 +309,12 @@ def get_complex_rmsd_metrics(
         .bool()
         .squeeze()
     )
-    atom_mask = feat["atom_resolved_mask"]
+    atom_mask = feat["atom_resolved_mask"].bool()
     
-    # Get design and target masks for resolved atoms only
-    design_atom_mask = atom_design_resolved_mask[atom_mask]
-    target_atom_mask = atom_target_resolved_mask[atom_mask]
+    # Keep full-length masks but zero out unresolved atoms
+    design_atom_mask = (atom_design_resolved_mask & atom_mask).float()
+    target_atom_mask = (atom_target_resolved_mask & atom_mask).float()
+    atom_mask = atom_mask.float()
     
     # Compute RMSD for all samples
     rmsd_all_samples = compute_complex_rmsd_all_samples(
@@ -317,7 +322,7 @@ def get_complex_rmsd_metrics(
         folded=folded,
         design_mask=design_atom_mask,
         target_mask=target_atom_mask,
-        atom_mask=torch.ones_like(design_atom_mask),
+        atom_mask=atom_mask,
     )
     
     # Compute metrics

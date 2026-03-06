@@ -917,6 +917,12 @@ class Analyze(Task):
                         "backbone_mask",
                     ]
                 }
+                # asym_id is needed by factored_lddt_loss but is not saved
+                # in the folding npz. For design-folding (single chain),
+                # all tokens belong to one chain so asym_id is all zeros.
+                feat_design["asym_id"] = torch.zeros_like(
+                    feat_design["token_index"]
+                )
                 feat_design["design_mask"] = torch.ones_like(
                     feat_design["token_index"]
                 ).bool()

@@ -133,6 +133,8 @@ When the pipeline completes your output directory will have:
 - `config/`, `steps.yaml`: configuration files.
 - `intermediate_designs/`: output of design step
   - `/*.cif` and `/*.npz`: CIF and NPZ (metadata files) for the designed proteins and targets before inverse folding
+  - `/backbone_filtered_out/`: (cyclic designs only) backbones that failed backbone filtering, moved here so inverse folding skips them
+  - `/backbone_filter_results.csv`: per-backbone pass/fail and metrics for each filter
 - `intermediate_designs_inverse_folded/`: output of inverse folding, folding, and analysis steps
   - `/*.cif` and `/*.npz` : CIF and NPZ for designed proteins and targets after inverse folding.  *Note: For designed residues, only the backbone atoms will have coordinates (sidechain coordinates will be 0,0,0).*
   - `/refold_cif`: refolded complex structures (target and binder). This is the primary input to the analysis and filtering steps.
@@ -367,6 +369,7 @@ boltzgen run example/inverse_folding/1brs.yaml \
 
 **Available steps:**
 - `design` - Generate num_design candidates using the diffusion model based on your design specification
+- `backbone_filtering` - (cyclic designs only) Filter generated backbones before inverse folding. Removes backbones where the cyclization site is in secondary structure, buried, or facing the target. See [Backbone Filtering](#backbone-filtering-cyclic-designs).
 - `inverse_folding` - Redesign sequences from the previous step using our inverse folding model
 - `folding` - Re-fold the designed binders with their targets using Boltz-2 model
 - `design_folding` - Re-fold the designed binders alone without target (disabled for peptide and nanobody binders)
@@ -374,6 +377,64 @@ boltzgen run example/inverse_folding/1brs.yaml \
 - `analysis` - Analyze the folded structures using various metrics to assess design quality
 - `filtering` - Filter and rank designs based on analysis results to select the best candidates
 
+
+# Backbone Filtering (cyclic designs)
+
+For cyclic peptide designs, BoltzGen automatically runs a backbone filtering step between design generation and inverse folding. This saves GPU time by skipping inverse folding, refolding, and analysis on backbones that have poor cyclization geometry.
+
+The filter is **auto-enabled** when the design spec contains `cyclic: true` and **auto-disabled** for non-cyclic designs. Chain IDs and binding residues are extracted from your design YAML — nothing needs to be hardcoded.
+
+### What it filters
+
+Three filters run in sequence. A backbone must pass all of them:
+
+1. **Cyclization Terminal SS** (`terminal_ss`) — Checks that the first and last N residues of the binder are in loop/coil conformation (not helix or sheet), using DSSP secondary structure assignment.
+2. **Cyclization Orientation** (`orientation`) — Rejects backbones where the cyclization site faces the target, using two sub-checks: (a) a CA→CB ray test that checks if the terminal side chains point toward the target, and (b) a minimum CA-CA distance from terminal residues to binding hotspot residues.
+3. **Cyclization Solvent Exposure** (`sasa`) — Checks that terminal loop residues are solvent-exposed using relative SASA (rSASA). Buried cyclization sites are rejected.
+
+### Skipping backbone filtering
+
+```bash
+boltzgen run design.yaml --output out/ --skip_backbone_filter
+```
+
+### Customizing filter thresholds
+
+All thresholds are configurable via `--config backbone_filtering`:
+
+```bash
+boltzgen run design.yaml --output out/ --protocol peptide-anything \
+  --config backbone_filtering ss_n_terminal=3 ss_min_coil=2 \
+  --config backbone_filtering rsasa_threshold=0.4 sasa_min_exposed=1 \
+  --config backbone_filtering min_distance=12.0 ray_radius=6.0
+```
+
+### All backbone filtering parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `terminal_ss_enabled` | `true` | Enable the terminal SS filter |
+| `ss_n_terminal` | `4` | Number of residues to check at each terminus |
+| `ss_min_coil` | `3` | Minimum coil residues required at each terminus |
+| `orientation_enabled` | `true` | Enable the orientation filter |
+| `ray_radius` | `8.0` | CA→CB ray proximity threshold (Angstroms) |
+| `min_distance` | `10.0` | Minimum terminal-to-hotspot CA distance (Angstroms) |
+| `orient_n_terminal` | `4` | Number of terminal residues for distance check |
+| `sasa_enabled` | `true` | Enable the solvent exposure filter |
+| `rsasa_threshold` | `0.5` | Minimum rSASA for a residue to count as exposed |
+| `sasa_n_loop` | `3` | Number of loop residues to check at each terminus |
+| `sasa_min_exposed` | `2` | Minimum exposed residues at each terminus |
+| `move_failed` | `true` | Move (not delete) failing CIFs to a subfolder |
+
+### Disabling individual filters
+
+You can disable any individual filter while keeping the others:
+
+```bash
+# Run only the SS and SASA filters, skip orientation
+boltzgen run design.yaml --output out/ \
+  --config backbone_filtering orientation_enabled=false
+```
 
 # Rerunning the filtering (recommended)
 After you generate designs, you will probably want to rerun the filtering step (which runs very fast) several times to tune your criteria for selecting good ones.
@@ -433,6 +494,9 @@ The `boltzgen run` command executes the BoltzGen binder design pipeline. Here ar
 - `--step_scale STEP_SCALE` - Fixed step scale to use (e.g. 1.8). Default is to use a schedule
 - `--noise_scale NOISE_SCALE` - Fixed noise scale to use (e.g. 0.98). Default is to use a schedule
 
+### Backbone Filtering
+- `--skip_backbone_filter` - Skip backbone filtering step between design and inverse folding. The filter auto-enables only for cyclic designs; this flag disables it entirely.
+
 ### Inverse Folding
 - `--skip_inverse_folding` - Skip inverse folding step
 - `--inverse_fold_num_sequences INVERSE_FOLD_NUM_SEQUENCES` - Number of sequences per backbone to generate in the inverse fold step. Default: 1
@@ -455,7 +519,7 @@ The `boltzgen run` command executes the BoltzGen binder design pipeline. Here ar
 
 ### Execution Options
 - `--no_subprocess` - Run each step in the main process. Will cause issues when devices >1.
-- `--steps {design,inverse_folding,design_folding,folding,affinity,analysis,filtering} [{design,inverse_folding,design_folding,folding,affinity,analysis,filtering} ...]` - Run only the specified pipeline steps (default: run all steps). See [The individual pipeline steps](#the-individual-pipeline-steps) section for details.
+- `--steps {design,backbone_filtering,inverse_folding,design_folding,folding,affinity,analysis,filtering} [{design,inverse_folding,design_folding,folding,affinity,analysis,filtering} ...]` - Run only the specified pipeline steps (default: run all steps). See [The individual pipeline steps](#the-individual-pipeline-steps) section for details.
 
 ### Model and Data Download Options
 - `--force_download` - Force a (re)-download of models and data.
@@ -518,7 +582,7 @@ boltzgen execute [-h] [--no_subprocess] [--steps {design,inverse_folding,design_
 
 ### Execution Options
 - `--no_subprocess` - Run each step in the main process. Will cause issues when devices >1.
-- `--steps {design,inverse_folding,design_folding,folding,affinity,analysis,filtering} [{design,inverse_folding,design_folding,folding,affinity,analysis,filtering} ...]` - Run only the specified pipeline steps (default: run all steps)
+- `--steps {design,backbone_filtering,inverse_folding,design_folding,folding,affinity,analysis,filtering} [{design,inverse_folding,design_folding,folding,affinity,analysis,filtering} ...]` - Run only the specified pipeline steps (default: run all steps)
 
 ## `boltzgen merge`
 

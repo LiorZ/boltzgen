@@ -68,6 +68,7 @@ main_script = project_root / "resources/main.py"
 
 step_names = [
     "design",
+    "backbone_filtering",
     "inverse_folding",
     "design_folding",
     "folding",
@@ -279,6 +280,14 @@ def add_configure_arguments(
         "--only_inverse_fold",
         action="store_true",
         help="Skip design step and only run inverse folding. Requires a fully specified structure.",
+    )
+
+    # Backbone filtering configuration options
+    p = parser.add_argument_group("backbone filtering")
+    p.add_argument(
+        "--skip_backbone_filter",
+        action="store_true",
+        help="Skip backbone filtering step between design and inverse folding.",
     )
 
     # Folding and affinity prediction configuration options
@@ -1058,6 +1067,29 @@ class BinderDesignPipeline:
                 )
             )
 
+            # Backbone filtering of diffusion-generated backbones.
+            if not args.skip_backbone_filter:
+                spec_info = extract_design_spec_info(args.design_spec)
+                if spec_info["is_cyclic"]:
+                    bb_filter_args = [
+                        f"input_dir={output_dir}",
+                        f"binder_chain={spec_info['binder_chain']}",
+                        f"target_chains=[{', '.join(spec_info['target_chains'])}]",
+                    ]
+                    if spec_info["binding_residues"]:
+                        br_str = ", ".join(str(r) for r in spec_info["binding_residues"])
+                        bb_filter_args.append(f"binding_residues=[{br_str}]")
+                    self.steps.append(
+                        PipelineStep(
+                            name="backbone_filtering",
+                            config_path=args.config_dir / "backbone_filter.yaml",
+                            args=bb_filter_args
+                            + config_args_by_step.get("backbone_filtering", []),
+                        )
+                    )
+                else:
+                    print("Design is not cyclic — skipping backbone filtering.")
+
             # Inverse folding of diffusion-generated backbones.
             if not args.skip_inverse_folding:
                 exclude_residues = []
@@ -1243,6 +1275,71 @@ class BinderDesignPipeline:
 
 
 ### Misc utiltiies ###
+def extract_design_spec_info(design_spec_paths: List[Path]) -> dict:
+    """Extract chain IDs and binding residues from design spec YAML(s).
+
+    Reads the raw YAML to find:
+    - binder_chain: chain ID of the first entity with cyclic: true (or the
+      first designed protein entity)
+    - target_chains: chain IDs from file entities
+    - binding_residues: residue numbers from binding_types
+
+    Returns a dict with keys: binder_chain, target_chains, binding_residues, is_cyclic.
+    """
+    binder_chain = None
+    target_chains = []
+    binding_residues = []
+    is_cyclic = False
+
+    for spec_path in design_spec_paths:
+        with open(spec_path) as f:
+            spec = yaml.safe_load(f)
+
+        for entity in spec.get("entities", []):
+            # Designed protein entity
+            if "protein" in entity:
+                protein = entity["protein"]
+                chain_id = protein.get("id")
+                if isinstance(chain_id, list):
+                    chain_id = chain_id[0]
+                if protein.get("cyclic", False):
+                    is_cyclic = True
+                    if binder_chain is None:
+                        binder_chain = chain_id
+                elif binder_chain is None:
+                    # Fall back to first designed protein if no cyclic found
+                    seq = protein.get("sequence", "")
+                    if isinstance(seq, str) and ".." in seq:
+                        binder_chain = chain_id
+
+            # File entity (target)
+            if "file" in entity:
+                file_entity = entity["file"]
+                for inc in file_entity.get("include", []):
+                    if "chain" in inc:
+                        chain_info = inc["chain"]
+                        tc = chain_info.get("id")
+                        if tc and tc not in target_chains:
+                            target_chains.append(tc)
+
+                for bt in file_entity.get("binding_types", []):
+                    if "chain" in bt:
+                        chain_info = bt["chain"]
+                        binding_str = chain_info.get("binding", "")
+                        if binding_str:
+                            for r in str(binding_str).split(","):
+                                r = r.strip()
+                                if r.isdigit():
+                                    binding_residues.append(int(r))
+
+    return {
+        "binder_chain": binder_chain or "A",
+        "target_chains": target_chains or ["B"],
+        "binding_residues": binding_residues or None,
+        "is_cyclic": is_cyclic,
+    }
+
+
 def check_design_specs(args: argparse.Namespace, moldir: Path, mols: Dict[str, Any]):
     last_banner = ""
     for design_spec in args.design_spec:

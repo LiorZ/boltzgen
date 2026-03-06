@@ -1,0 +1,30 @@
+_target_: boltzgen.task.backbone_filter.backbone_filter.BackboneFilter
+
+input_dir: null
+
+# Chain IDs — overridden by pipeline from design spec
+binder_chain: "A"
+target_chains:
+  - "B"
+
+# Terminal SS filter
+terminal_ss_enabled: true
+ss_n_terminal: 4
+ss_min_coil: 3
+
+# Orientation filter
+orientation_enabled: true
+binding_residues: null
+ray_radius: 8.0
+min_distance: 10.0
+orient_n_terminal: 4
+
+# SASA filter
+sasa_enabled: true
+rsasa_threshold: 0.5
+sasa_n_loop: 3
+sasa_min_exposed: 2
+
+# Behavior
+move_failed: true
+glob_pattern: "*.cif"

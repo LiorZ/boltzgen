@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM nvidia/cuda:12.2.2-cudnn8-devel-ubuntu22.04
+FROM vastai/pytorch:cuda-12.4.1-auto
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
@@ -35,8 +35,7 @@ RUN apt-get update && \
 
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
     update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
-    curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 && \
-    python3.11 -m pip install --upgrade pip setuptools setuptools_scm wheel
+    python3.11 -m pip install --upgrade --ignore-installed setuptools setuptools_scm wheel
 
 WORKDIR /app
 
@@ -54,8 +53,14 @@ ARG USERNAME=boltzgen
 ARG USER_UID=1000
 ARG USER_GID=1000
 
-RUN groupadd --gid ${USER_GID} ${USERNAME} && \
-    useradd --uid ${USER_UID} --gid ${USER_GID} --create-home --shell /bin/bash ${USERNAME}
+RUN if ! getent group "${USER_GID}" >/dev/null; then groupadd --gid "${USER_GID}" "${USERNAME}"; fi && \
+    if ! id -u "${USERNAME}" >/dev/null 2>&1; then \
+        if getent passwd "${USER_UID}" >/dev/null; then \
+            useradd --gid "${USER_GID}" --create-home --shell /bin/bash "${USERNAME}"; \
+        else \
+            useradd --uid "${USER_UID}" --gid "${USER_GID}" --create-home --shell /bin/bash "${USERNAME}"; \
+        fi; \
+    fi
 
 RUN mkdir -p "${HF_HOME}" && chown -R ${USER_UID}:${USER_GID} "${HF_HOME}"
 
